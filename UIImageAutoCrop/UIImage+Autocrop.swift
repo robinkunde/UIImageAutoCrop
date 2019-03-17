@@ -9,52 +9,51 @@
 import UIKit
 
 extension UIImage {
-    enum CropPixelPosition {
-        case Transparent
-        case TopLeft
-        case TopRight
-        case BottomLeft
-        case BottomRight
+    enum CroppingStrategy {
+        case transparent
+        case topLeftPixel
+        case topRightPixel
+        case bottomLeftPixel
+        case bottomRightPixel
     }
 
-    func autocrop(withColorFromPixelAtPosition cropPixelPosition: CropPixelPosition) -> UIImage? {
-        guard let imageRef = CGImage else {
-            return nil
-        }
+    func autocrop(strategy: CroppingStrategy) -> UIImage? {
+        guard let imageRef = cgImage else { return nil }
 
-        let alphaInfo = CGImageGetAlphaInfo(imageRef)
-        guard cropPixelPosition != .Transparent || (alphaInfo == .First || alphaInfo == .Last || alphaInfo == .PremultipliedFirst || alphaInfo == .PremultipliedLast) else {
-            return nil
-        }
+        let alphaInfo = imageRef.alphaInfo
 
-        let bytesPerPixel = CGImageGetBitsPerPixel(imageRef) / 8
-        let bitsPerComponent = CGImageGetBitsPerComponent(imageRef)
+        let bytesPerPixel = imageRef.bitsPerPixel / 8
+        let bitsPerComponent = imageRef.bitsPerComponent
         guard bitsPerComponent == 8 && bytesPerPixel == 4 else {
             return nil
         }
 
-        let width = CGImageGetWidth(imageRef)
-        let height = CGImageGetHeight(imageRef)
-        let bytesPerRow = CGImageGetBytesPerRow(imageRef)
+        let width = imageRef.width
+        let height = imageRef.height
+        let bytesPerRow = imageRef.bytesPerRow
+        guard bytesPerRow % bytesPerPixel == 0 else { return nil }
 
-        guard let data = CGDataProviderCopyData(CGImageGetDataProvider(imageRef)) else {
+        guard
+            let data = imageRef.dataProvider?.data,
+            let byteData = CFDataGetBytePtr(data)
+        else {
             return nil
         }
-        let imageData = UnsafeMutablePointer<UInt32>(CFDataGetBytePtr(data))
 
-        let pixelsPerRow = bytesPerRow / bytesPerPixel
+        let imageData = UnsafeRawPointer(byteData).bindMemory(to: UInt32.self, capacity: width * height)
         let cropColorValue: UInt32
-        switch cropPixelPosition {
-        case .Transparent:
+        switch strategy {
+        case .transparent:
+            guard alphaInfo == .first || alphaInfo == .last || alphaInfo == .premultipliedFirst || alphaInfo == .premultipliedLast else { return nil }
             cropColorValue = 0
-        case .TopLeft:
+        case .topLeftPixel:
             cropColorValue = imageData[0]
-        case .TopRight:
+        case .topRightPixel:
             cropColorValue = imageData[width - 1]
-        case .BottomLeft:
-            cropColorValue = imageData[pixelsPerRow * (height - 1)]
-        case .BottomRight:
-            cropColorValue = imageData[pixelsPerRow * (height - 1) + (width - 1)]
+        case .bottomLeftPixel:
+            cropColorValue = imageData[width * (height - 1)]
+        case .bottomRightPixel:
+            cropColorValue = imageData[width * (height - 1) + (width - 1)]
         }
 
         // positions of the x-most pixels that cannot be cropped
@@ -64,9 +63,9 @@ extension UIImage {
         var right = 0
         var isEmpty = true
         outerloop: for y in 0..<height {
-            var pixelPointer = imageData.advancedBy(pixelsPerRow * y)
+            var pixelPointer = imageData.advanced(by: width * y)
             for x in 0..<width {
-                if pixelPointer.memory != cropColorValue {
+                if pixelPointer.pointee != cropColorValue {
                     left = x
                     top = y
                     isEmpty = false
@@ -81,10 +80,10 @@ extension UIImage {
         }
 
         if top < (height - 1) {
-            outerloop: for y in ((top + 1)..<height).reverse() {
-                var pixelPointer = imageData.advancedBy(pixelsPerRow * y)
+            outerloop: for y in ((top + 1)..<height).reversed() {
+                var pixelPointer = imageData.advanced(by: width * y)
                 for x in 0..<width {
-                    if pixelPointer.memory != cropColorValue {
+                    if pixelPointer.pointee != cropColorValue {
                         left = min(left, x)
                         bottom = y
                         break outerloop
@@ -97,26 +96,26 @@ extension UIImage {
 
         if left > 0 && (bottom - top) > 1 {
             outerloop: for x in 0..<left {
-                var pixelPointer = imageData.advancedBy(pixelsPerRow * (top + 1) + x)
+                var pixelPointer = imageData.advanced(by: width * (top + 1) + x)
                 for _ in (top + 1)..<bottom {
-                    if pixelPointer.memory != cropColorValue {
+                    if pixelPointer.pointee != cropColorValue {
                         left = x
                         break outerloop
                     }
-                    pixelPointer += pixelsPerRow
+                    pixelPointer += width
                 }
             }
         }
 
         if left < (width - 1) {
-            outerloop: for x in ((left + 1)..<width).reverse() {
-                var pixelPointer = imageData.advancedBy(pixelsPerRow * top + x)
+            outerloop: for x in ((left + 1)..<width).reversed() {
+                var pixelPointer = imageData.advanced(by: width * top + x)
                 for _ in top...bottom {
-                    if pixelPointer.memory != cropColorValue {
+                    if pixelPointer.pointee != cropColorValue {
                         right = x
                         break outerloop
                     }
-                    pixelPointer += pixelsPerRow
+                    pixelPointer += width
                 }
             }
         }
